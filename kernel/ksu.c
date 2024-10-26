@@ -10,6 +10,9 @@
 #include "klog.h" // IWYU pragma: keep
 #include "ksu.h"
 #include "throne_tracker.h"
+#ifdef CONFIG_KSU_SUSFS
+#include <linux/susfs.h>
+#endif
 
 static struct workqueue_struct *ksu_workqueue;
 
@@ -49,6 +52,9 @@ int __init kernelsu_init(void)
 	pr_alert("*************************************************************");
 #endif
 
+#ifdef CONFIG_KSU_SUSFS
+	susfs_init();
+#endif
 	ksu_core_init();
 
 	ksu_workqueue = alloc_ordered_workqueue("kernelsu_work_queue", 0);
