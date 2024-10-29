@@ -457,6 +457,24 @@ int ksu_handle_prctl(int option, unsigned long arg2, unsigned long arg3,
 			return 0;
 		}
 #endif
+#ifdef CONFIG_KSU_SUSFS_SPOOF_BOOTCONFIG
+		if (arg2 == CMD_SUSFS_SET_BOOTCONFIG) {
+			int error = 0;
+			if (!ksu_access_ok((void __user*)arg3, SUSFS_FAKE_BOOT_CONFIG_SIZE)) {
+				pr_err("susfs: CMD_SUSFS_SET_BOOTCONFIG -> arg3 is not accessible\n");
+				return 0;
+			}
+			if (!ksu_access_ok((void __user*)arg5, sizeof(error))) {
+				pr_err("susfs: CMD_SUSFS_SET_BOOTCONFIG -> arg5 is not accessible\n");
+				return 0;
+			}
+			error = susfs_set_bootconfig((char __user*)arg3);
+			pr_info("susfs: CMD_SUSFS_SET_BOOTCONFIG -> ret: %d\n", error);
+			if (copy_to_user((void __user*)arg5, &error, sizeof(error)))
+				pr_info("susfs: copy_to_user() failed\n");
+			return 0;
+		}
+#endif
 	}
 #endif
 

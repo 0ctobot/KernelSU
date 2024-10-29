@@ -59,5 +59,13 @@ config KSU_SUSFS_ENABLE_LOG
     help
       - Allow logging susfs log to kernel, uncheck it to completely disable all susfs log.
 
+config KSU_SUSFS_SPOOF_BOOTCONFIG
+    bool "Enable to spoof /proc/bootconfig"
+    depends on KSU_SUSFS
+    default y
+    help
+      - Spoof the output of /proc/bootconfig with a user-defined file.
+      - Effective on all processes.
+
 endmenu
 endmenu

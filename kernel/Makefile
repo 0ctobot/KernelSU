@@ -78,6 +78,9 @@ endif
 ifdef KSU_SUSFS_ENABLE_LOG
 ccflags-y += -DKSU_SUSFS_ENABLE_LOG
 endif
+ifdef KSU_SUSFS_SPOOF_BOOTCONFIG
+ccflags-y += -DKSU_SUSFS_SPOOF_BOOTCONFIG
+endif
 else
 $(info -- You have not integrated susfs in your kernel.)
 $(info -- Read: https://gitlab.com/simonpunk/susfs4ksu)
