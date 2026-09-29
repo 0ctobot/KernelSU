@@ -47,6 +47,7 @@ struct ksu_lookup_symbol_ctx {
     const char *symbol_name;
     size_t symbol_len;
     int match_count;
+    void *match;
 };
 
 unsigned long __nocfi find_kernel_symbol_exact(const char *symbol_name)
@@ -124,6 +125,57 @@ static __nocfi void *resolve_lto_symbol(const char *symbol_name, size_t symbol_l
     return addr;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 6, 0)
+static int find_llvm_symbol_cb(void *data, const char *name, unsigned long addr)
+#else
+static int find_llvm_symbol_cb(void *data, const char *name, struct module *mod, unsigned long addr)
+#endif
+{
+    struct ksu_lookup_symbol_ctx *ctx = data;
+
+    if (!name || !addr)
+        return 0;
+
+    if (strncmp(name, ctx->symbol_name, ctx->symbol_len) != 0)
+        return 0;
+
+    if (strncmp(name + ctx->symbol_len, ".llvm.", 6) != 0)
+        return 0;
+
+    ctx->match = (void *)addr;
+    ctx->match_count++;
+    return 0;
+}
+
+static __nocfi void *resolve_llvm_symbol(const char *symbol_name, size_t symbol_len)
+{
+    struct ksu_lookup_symbol_ctx ctx = {
+        .symbol_name = symbol_name,
+        .symbol_len = symbol_len,
+        .match_count = 0,
+        .match = NULL,
+    };
+
+#if !ALWAYS_HAVE_ON_EACH_SYMBOL
+    if (kallsyms_on_each_symbol_fn)
+        kallsyms_on_each_symbol_fn(find_llvm_symbol_cb, &ctx);
+#else
+    kallsyms_on_each_symbol(find_llvm_symbol_cb, &ctx);
+#endif
+
+    if (!ctx.match)
+        return NULL;
+
+    if (ctx.match_count > 1) {
+        pr_warn("symbol %s has %d LLVM LTO variants, refusing to resolve\n",
+                symbol_name, ctx.match_count);
+        return NULL;
+    }
+
+    pr_info("resolved LLVM LTO symbol: %s.llvm.*\n", symbol_name);
+    return ctx.match;
+}
+
 void *ksu_resolve_symbol_for_functable_hook(const char *symbol_name)
 {
     void *addr;
@@ -147,7 +199,11 @@ void *ksu_resolve_symbol_for_functable_hook(const char *symbol_name)
     if (addr)
         return addr;
 
-    return resolve_lto_symbol(symbol_name, symbol_len);
+    addr = resolve_lto_symbol(symbol_name, symbol_len);
+    if (addr)
+        return addr;
+
+    return resolve_llvm_symbol(symbol_name, symbol_len);
 }
 
 void __init ksu_init_symbol_resolver()
