@@ -1,4 +1,5 @@
 #include "feature/selinux_hide.h"
+#include <linux/atomic.h>
 #include <linux/rcupdate.h>
 #include <linux/slab.h>
 #include <linux/mm.h>
@@ -16,6 +17,7 @@
 #include <linux/types.h>
 #include <linux/uaccess.h>
 #include <linux/namei.h>
+#include <linux/mutex.h>
 #include <linux/workqueue.h>
 #include <linux/uio.h>
 #include <linux/stat.h>
@@ -54,7 +56,10 @@ static const char KERNEL_SU_RC[] =
 static void stop_init_rc_hook();
 static void stop_execve_hook();
 
-static struct work_struct stop_input_hook_work;
+static void do_stop_input_hook(struct work_struct *work);
+static DECLARE_WORK(stop_input_hook_work, do_stop_input_hook);
+static DEFINE_MUTEX(input_hook_lock);
+static atomic_t input_hook_stopped = ATOMIC_INIT(0);
 
 #define MAX_ARG_STRINGS 0x7FFFFFFF
 struct user_arg_ptr {
@@ -630,10 +635,16 @@ static struct kprobe input_event_kp = {
     .symbol_name = "input_event",
     .pre_handler = input_handle_event_handler_pre,
 };
+static bool input_event_kp_registered;
 
 static void do_stop_input_hook(struct work_struct *work)
 {
-    unregister_kprobe(&input_event_kp);
+    mutex_lock(&input_hook_lock);
+    if (input_event_kp_registered) {
+        unregister_kprobe(&input_event_kp);
+        input_event_kp_registered = false;
+    }
+    mutex_unlock(&input_hook_lock);
 }
 
 static void stop_init_rc_hook()
@@ -645,11 +656,9 @@ static void stop_init_rc_hook()
 
 void ksu_stop_input_hook_runtime(void)
 {
-    static bool input_hook_stopped = false;
-    if (input_hook_stopped) {
+    if (atomic_xchg(&input_hook_stopped, 1)) {
         return;
     }
-    input_hook_stopped = true;
     bool ret = schedule_work(&stop_input_hook_work);
     pr_info("unregister input kprobe: %d!\n", ret);
 }
@@ -662,10 +671,14 @@ void __init ksu_ksud_init()
     ksu_syscall_table_hook(__NR_read, ksu_sys_read, &orig_sys_read);
     ksu_syscall_table_hook(__NR_fstat, ksu_sys_fstat, &orig_sys_fstat);
 
-    ret = register_kprobe(&input_event_kp);
-    pr_info("ksud: input_event_kp: %d\n", ret);
-
-    INIT_WORK(&stop_input_hook_work, do_stop_input_hook);
+    /* A callback can queue stop work before registration returns. */
+    mutex_lock(&input_hook_lock);
+    if (!atomic_read(&input_hook_stopped)) {
+        ret = register_kprobe(&input_event_kp);
+        pr_info("ksud: input_event_kp: %d\n", ret);
+        input_event_kp_registered = !ret;
+    }
+    mutex_unlock(&input_hook_lock);
 }
 
 void __exit ksu_ksud_exit()
@@ -673,7 +686,9 @@ void __exit ksu_ksud_exit()
     // TODO:
     // this should be done before unregister vfs_read_kp
     // stop_init_rc_hook();
-    unregister_kprobe(&input_event_kp);
+    atomic_set(&input_hook_stopped, 1);
+    do_stop_input_hook(&stop_input_hook_work);
+    cancel_work_sync(&stop_input_hook_work);
 
     if (module_rc_buf) {
         free_module_rc();
